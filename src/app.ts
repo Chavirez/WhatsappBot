@@ -1,6 +1,5 @@
-import { createBot, createProvider, createFlow, addKeyword, utils } from '@builderbot/bot'
-import { MemoryDB as Database } from '@builderbot/bot'
-import { BaileysProvider as Provider } from '@builderbot/provider-baileys'
+import { createBot, createProvider, createFlow, addKeyword, utils, MemoryDB } from '@builderbot/bot'
+import { BaileysProvider } from '@builderbot/provider-baileys'
 
 const PORT = process.env.PORT ?? 3008
 
@@ -25,29 +24,7 @@ const loanOffer = [
     '2) ME INTERESA',
 ].join('\n')
 
-const faqFlow = addKeyword<Provider, Database>(utils.setEvent('LOAN_FAQ'))
-    .addAnswer(
-        [
-            '*PREGUNTAS FRECUENTES:*',
-            '',
-            '• *Requisitos:* INE y comprobante de domicilio a su nombre (predial o agua).',
-            '• *Tiempo de proceso:* máximo 2 horas. Recibe su dinero el mismo día.',
-            '• *¿Cómo se realiza?* Todo el trámite es por WhatsApp. No necesita acudir a ningún lugar. Entrega a domicilio en efectivo.',
-            '• *¿Revisan Buró de Crédito?* No. Solo se solicita informar si cuenta con deudas pendientes.',
-            '',
-            '1) ME INTERESA',
-            '2) NO ME INTERESA',
-        ].join('\n'),
-        { capture: true },
-        async (ctx, { gotoFlow, fallBack }) => {
-            const answer = ctx.body.trim().toLocaleLowerCase()
-            if (answer === '1' || answer.includes('me interesa')) return gotoFlow(questionnaireFlow)
-            if (answer === '2' || answer.includes('no me interesa')) return gotoFlow(goodbyeFlow)
-            return fallBack('Por favor, conteste con *1) ME INTERESA* o *2) NO ME INTERESA*.')
-        }
-    )
-
-const goodbyeFlow = addKeyword<Provider, Database>(utils.setEvent('LOAN_GOODBYE')).addAnswer(
+const goodbyeFlow = addKeyword(utils.setEvent('LOAN_GOODBYE')).addAnswer(
     [
         'Muchas gracias por su interés.',
         '',
@@ -57,10 +34,14 @@ const goodbyeFlow = addKeyword<Provider, Database>(utils.setEvent('LOAN_GOODBYE'
     ].join('\n')
 )
 
-const questionnaireFlow = addKeyword<Provider, Database>(utils.setEvent('LOAN_QUESTIONNAIRE'))
-    .addAnswer('Muy bien, por favor conteste las siguientes preguntas para continuar:\n\n* Nombre y edad:', { capture: true }, async (ctx, { state }) => {
-        await state.update({ nameAndAge: ctx.body })
-    })
+const questionnaireFlow = addKeyword(utils.setEvent('LOAN_QUESTIONNAIRE'))
+    .addAnswer(
+        'Muy bien, por favor conteste las siguientes preguntas para continuar:\n\nNombre y edad:',
+        { capture: true },
+        async (ctx, { state }) => {
+            await state.update({ nameAndAge: ctx.body })
+        }
+    )
     .addAnswer('* ¿En qué trabaja?', { capture: true }, async (ctx, { state }) => {
         await state.update({ occupation: ctx.body })
     })
@@ -82,9 +63,34 @@ const questionnaireFlow = addKeyword<Provider, Database>(utils.setEvent('LOAN_QU
     .addAnswer('* ¿Tiene negocio propio?', { capture: true }, async (ctx, { state }) => {
         await state.update({ hasBusiness: ctx.body })
     })
-    .addAnswer('Gracias por compartir su información. Revisaremos sus datos y nos pondremos en contacto con usted.', { delay: 500 })
+    .addAnswer(
+        'Gracias por compartir su información. Revisaremos sus datos y nos pondremos en contacto con usted.',
+        { delay: 500 }
+    )
 
-const welcomeFlow = addKeyword<Provider, Database>([
+const faqFlow = addKeyword(utils.setEvent('LOAN_FAQ'))
+    .addAnswer(
+        [
+            '*PREGUNTAS FRECUENTES:*',
+            '',
+            '• *Requisitos:* INE y comprobante de domicilio a su nombre (predial o agua).',
+            '• *Tiempo de proceso:* máximo 2 horas. Recibe su dinero el mismo día.',
+            '• *¿Cómo se realiza?* Todo el trámite es por WhatsApp. No necesita acudir a ningún lugar. Entrega a domicilio en efectivo.',
+            '• *¿Revisan Buró de Crédito?* No. Solo se solicita informar si cuenta con deudas pendientes.',
+            '',
+            '1) ME INTERESA',
+            '2) NO ME INTERESA',
+        ].join('\n'),
+        { capture: true },
+        async (ctx, { gotoFlow, fallBack }) => {
+            const answer = ctx.body.trim().toLocaleLowerCase()
+            if (answer === '1' || answer.includes('me interesa')) return gotoFlow(questionnaireFlow)
+            if (answer === '2' || answer.includes('no me interesa')) return gotoFlow(goodbyeFlow)
+            return fallBack('Por favor, conteste con *1) ME INTERESA* o *2) NO ME INTERESA*.')
+        }
+    )
+
+const welcomeFlow = addKeyword([
     'hi',
     'hello',
     'hola',
@@ -104,14 +110,8 @@ const welcomeFlow = addKeyword<Provider, Database>([
 
 const main = async () => {
     const adapterFlow = createFlow([welcomeFlow, faqFlow, goodbyeFlow, questionnaireFlow])
-    
-    // If you experience ERRO AUTH issues, check the latest WhatsApp version at:
-    // https://wppconnect.io/whatsapp-versions/
-    // Example: version "2.3000.1035824857-alpha" -> [2, 3000, 1035824857]
-    const adapterProvider = createProvider(Provider, 
-		{ version: [2, 3000, 1035824857] } 
-	)
-    const adapterDB = new Database()
+    const adapterProvider = createProvider(BaileysProvider)
+    const adapterDB = new MemoryDB()
 
     const { handleCtx, httpServer } = await createBot({
         flow: adapterFlow,
