@@ -1,5 +1,6 @@
 import { createBot, createProvider, createFlow, addKeyword, utils, MemoryDB, EVENTS } from '@builderbot/bot'
 import { BaileysProvider } from '@builderbot/provider-baileys'
+import { appendLeadToSheet } from './sheets'
 
 const PORT = process.env.PORT ?? 3008
 
@@ -24,6 +25,7 @@ const loanOffer = [
     '2) ME INTERESA',
 ].join('\n')
 
+// Flujo para despedida (cuando el usuario elige no continuar)
 const goodbyeFlow = addKeyword(utils.setEvent('LOAN_GOODBYE')).addAnswer(
     [
         'Muchas gracias por su interés.',
@@ -38,12 +40,13 @@ const goodbyeFlow = addKeyword(utils.setEvent('LOAN_GOODBYE')).addAnswer(
     }
 )
 
+// Flujo de preguntas
 const questionnaireFlow = addKeyword(utils.setEvent('LOAN_QUESTIONNAIRE'))
     .addAnswer(
         'Muy bien, por favor conteste las siguientes preguntas para continuar:\n\nNombre y edad:',
         { capture: true },
         async (ctx, { state }) => {
-            await state.update({ nameAndAge: ctx.body })
+            await state.update({ nameAndAge: ctx.body, phone: ctx.from })
         }
     )
     .addAnswer('* ¿En qué trabaja?', { capture: true }, async (ctx, { state }) => {
@@ -71,10 +74,22 @@ const questionnaireFlow = addKeyword(utils.setEvent('LOAN_QUESTIONNAIRE'))
         'Gracias por compartir su información. Revisaremos sus datos y nos pondremos en contacto con usted.',
         { delay: 500 },
         async (ctx, { state }) => {
+            const collectedData = state.getMyState() ?? {}
+
+            // Marcamos la conversación como finalizada para bloquear respuestas futuras
             await state.update({ conversationFinished: true })
+
+            // Enviar a Google Sheets en segundo plano
+            appendLeadToSheet({
+                phone: ctx.from,
+                ...collectedData,
+            }).catch((err) => {
+                console.error('Error al guardar en Google Sheets en segundo plano:', err)
+            })
         }
     )
 
+// Flujo de preguntas frecuentes
 const faqFlow = addKeyword(utils.setEvent('LOAN_FAQ'))
     .addAnswer(
         [
@@ -83,7 +98,7 @@ const faqFlow = addKeyword(utils.setEvent('LOAN_FAQ'))
             '• *Requisitos:* INE y comprobante de domicilio a su nombre (predial o agua).',
             '• *Tiempo de proceso:* máximo 2 horas. Recibe su dinero el mismo día.',
             '• *¿Cómo se realiza?* Todo el trámite es por WhatsApp. No necesita acudir a ningún lugar. Entrega a domicilio en efectivo.',
-            '• *¿Revisan Buró de Crédito?* No. Solo se solicita informar si cuenta con deudas pendientes.',
+            '• *¿Revisan Buró de Crédito?* No, Solo se solicita informar si cuenta con deudas pendientes.',
             '',
             '1) ME INTERESA',
             '2) NO ME INTERESA',
@@ -97,9 +112,14 @@ const faqFlow = addKeyword(utils.setEvent('LOAN_FAQ'))
         }
     )
 
+// Flujo de bienvenida principal
 const welcomeFlow = addKeyword([EVENTS.WELCOME, utils.setEvent('LOAN_START'), utils.setEvent('LOAN_REMINDER')])
     .addAction(async (ctx, { state, endFlow }) => {
-        if (state.get<boolean>('conversationFinished')) return endFlow()
+        // Si la conversación ya fue marcada como terminada, el bot no contesta nada
+        const isFinished = state.get<boolean>('conversationFinished')
+        if (isFinished) {
+            return endFlow()
+        }
     })
     .addAnswer(loanOffer, { capture: true }, async (ctx, { gotoFlow, fallBack }) => {
         const answer = ctx.body.trim().toLocaleLowerCase()
@@ -110,8 +130,22 @@ const welcomeFlow = addKeyword([EVENTS.WELCOME, utils.setEvent('LOAN_START'), ut
         return fallBack('Por favor, conteste con *1) QUIERO MÁS INFORMACIÓN* o *2) ME INTERESA*.')
     })
 
+// Flujo independiente para reiniciar: responde directamente con la oferta y captura la respuesta
+const resetFlow = addKeyword(['repetir chat', 'reiniciar chat', 'volver a empezar'])
+    .addAction(async (ctx, { state }) => {
+        await state.clear()
+    })
+    .addAnswer(loanOffer, { capture: true }, async (ctx, { gotoFlow, fallBack }) => {
+        const answer = ctx.body.trim().toLocaleLowerCase()
+        if (answer === '1' || answer.includes('más información') || answer.includes('mas informacion')) {
+            return gotoFlow(faqFlow)
+        }
+        if (answer === '2' || answer.includes('me interesa')) return gotoFlow(questionnaireFlow)
+        return fallBack('Por favor, conteste con *1) QUIERO MÁS INFORMACIÓN* o *2) ME INTERESA*.')
+    })
 const main = async () => {
-    const adapterFlow = createFlow([welcomeFlow, faqFlow, goodbyeFlow, questionnaireFlow])
+    // Es importante incluir resetFlow en la lista de flujos
+    const adapterFlow = createFlow([welcomeFlow, faqFlow, goodbyeFlow, questionnaireFlow, resetFlow])
     const adapterProvider = createProvider(BaileysProvider)
     const adapterDB = new MemoryDB()
 
