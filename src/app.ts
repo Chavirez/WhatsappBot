@@ -1,4 +1,4 @@
-import { createBot, createProvider, createFlow, addKeyword, utils, MemoryDB } from '@builderbot/bot'
+import { createBot, createProvider, createFlow, addKeyword, utils, MemoryDB, EVENTS } from '@builderbot/bot'
 import { BaileysProvider } from '@builderbot/provider-baileys'
 
 const PORT = process.env.PORT ?? 3008
@@ -31,7 +31,11 @@ const goodbyeFlow = addKeyword(utils.setEvent('LOAN_GOODBYE')).addAnswer(
         'Si tiene alguna duda adicional en la que podamos ayudarle, no dude en contactarnos al siguiente número: 644 230 8715.',
         '',
         '¡Que tenga un buen día!',
-    ].join('\n')
+    ].join('\n'),
+    null,
+    async (ctx, { state }) => {
+        await state.update({ conversationFinished: true })
+    }
 )
 
 const questionnaireFlow = addKeyword(utils.setEvent('LOAN_QUESTIONNAIRE'))
@@ -65,7 +69,10 @@ const questionnaireFlow = addKeyword(utils.setEvent('LOAN_QUESTIONNAIRE'))
     })
     .addAnswer(
         'Gracias por compartir su información. Revisaremos sus datos y nos pondremos en contacto con usted.',
-        { delay: 500 }
+        { delay: 500 },
+        async (ctx, { state }) => {
+            await state.update({ conversationFinished: true })
+        }
     )
 
 const faqFlow = addKeyword(utils.setEvent('LOAN_FAQ'))
@@ -90,15 +97,10 @@ const faqFlow = addKeyword(utils.setEvent('LOAN_FAQ'))
         }
     )
 
-const welcomeFlow = addKeyword([
-    'hi',
-    'hello',
-    'hola',
-    'prestamo',
-    'préstamo',
-    utils.setEvent('LOAN_START'),
-    utils.setEvent('LOAN_REMINDER'),
-])
+const welcomeFlow = addKeyword([EVENTS.WELCOME, utils.setEvent('LOAN_START'), utils.setEvent('LOAN_REMINDER')])
+    .addAction(async (ctx, { state, endFlow }) => {
+        if (state.get<boolean>('conversationFinished')) return endFlow()
+    })
     .addAnswer(loanOffer, { capture: true }, async (ctx, { gotoFlow, fallBack }) => {
         const answer = ctx.body.trim().toLocaleLowerCase()
         if (answer === '1' || answer.includes('más información') || answer.includes('mas informacion')) {
